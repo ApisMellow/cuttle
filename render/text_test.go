@@ -35,3 +35,31 @@ func TestRender_BasicState(t *testing.T) {
 		}
 	}
 }
+
+func TestRender_TurnStartSteps(t *testing.T) {
+	base := engine.GameState{Active: engine.P2, Deck: make([]card.Card, 3)}
+
+	pw := base
+	pw.Phase = engine.PhasePendingWin
+	if out := Render(pw); !strings.Contains(out, "Not So Fast! P1 reached their threshold; P2 may counter or let it happen") {
+		t.Errorf("pending win line missing:\n%s", out)
+	}
+
+	od := base
+	od.Phase = engine.PhaseAwaitingDiscard
+	od.Owed = [2]int{0, 2}
+	out := Render(od)
+	for _, want := range []string{"P2 starts the turn by paying the owed discard", "P2 owes 2 discards"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q:\n%s", want, out)
+		}
+	}
+
+	// A debt waiting for a later turn start (after a counter-back) shows too.
+	later := base
+	later.Active = engine.P1
+	later.Owed = [2]int{0, 2}
+	if out := Render(later); !strings.Contains(out, "P2 owes 2 discards") || strings.Contains(out, "paying") {
+		t.Errorf("waiting debt:\n%s", out)
+	}
+}

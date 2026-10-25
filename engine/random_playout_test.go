@@ -37,7 +37,7 @@ func dealRandomPlayout(rng *rand.Rand) GameState {
 // countAllCards tallies every card visible in every zone of the state.
 // Pending.Card and Pending.CounterChain are live (removed from hands, not
 // yet scrapped) only while a counter window is open; in PhaseSevenChoosing
-// and PhaseAwaitingDiscard the one-off itself has already been scrapped.
+// the one-off itself has already been scrapped.
 // Pending.Revealed cards have been removed from the deck.
 func countAllCards(s GameState) map[card.Card]int {
 	counts := make(map[card.Card]int, 52)
@@ -82,8 +82,13 @@ func checkPlayoutInvariants(t *testing.T, s GameState, seed int64, step int) {
 		}
 	}
 
-	// Pending is set exactly in the phases that require it.
-	pendingPhase := s.Phase == PhaseAwaitingCounter || s.Phase == PhaseSevenChoosing || s.Phase == PhaseAwaitingDiscard
+	// Pending is set exactly in the phases that require it. New play reaches
+	// PhaseAwaitingDiscard only as the owed-discard step: no Pending, a debt,
+	// and cards to pay it with.
+	pendingPhase := s.Phase == PhaseAwaitingCounter || s.Phase == PhaseSevenChoosing
+	if s.Phase == PhaseAwaitingDiscard && (s.Owed[s.Active] <= 0 || len(s.Players[s.Active].Hand) == 0) {
+		t.Fatalf("seed %d step %d: owed-discard step with owed=%v hand=%v", seed, step, s.Owed, s.Players[s.Active].Hand)
+	}
 	if pendingPhase && s.Pending == nil {
 		t.Fatalf("seed %d step %d: phase %d requires Pending, got nil", seed, step, s.Phase)
 	}
@@ -131,8 +136,12 @@ func checkPlayoutInvariants(t *testing.T, s GameState, seed int64, step int) {
 // coherent result.
 func TestRandomPlayouts(t *testing.T) {
 	const games = 500
-	counters, pendingWins := 0, 0
+	counters, pendingWins, owedDiscards := 0, 0, 0
 	defer func() {
+		// So must the owed discard (a 4's debt paid at turn start).
+		if !t.Failed() && owedDiscards == 0 {
+			t.Errorf("no game reached an owed discard in %d games", games)
+		}
 		// Counter rewinds must actually be in play, not just offered.
 		if !t.Failed() && counters == 0 {
 			t.Errorf("no counter was applied in %d games", games)
@@ -180,6 +189,9 @@ func TestRandomPlayouts(t *testing.T) {
 			s = next
 			if s.Phase == PhasePendingWin {
 				pendingWins++
+			}
+			if s.Phase == PhaseAwaitingDiscard {
+				owedDiscards++
 			}
 			checkPlayoutInvariants(t, s, seed, step)
 		}

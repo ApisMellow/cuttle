@@ -113,6 +113,9 @@ func wantRestore(t *testing.T, before, got GameState, counterer PlayerID, fromOp
 type rewindCase struct {
 	name   string
 	oneOff card.Card
+	// wantPhase is P2's phase at the start of its turn (the zero value is
+	// PhaseNormal; a 4 opens the owed-discard step).
+	wantPhase Phase
 	// p1Turn plays P1's turn from s (P1 active) and returns the state at
 	// P2's turn start.
 	p1Turn func(t *testing.T, s GameState) GameState
@@ -182,18 +185,15 @@ func rewindCases() []rewindCase {
 					t.Errorf("4♣ should be back at scrap index 1: scrap=%v hand=%v", after.Scrap, after.Players[P1].Hand)
 				}
 			}},
-		{name: "Four", oneOff: pc(card.Four, card.Spades),
-			// 1a keeps today's discard flow: P2 discards inside P1's turn.
-			p1Turn: func(t *testing.T, s GameState) GameState {
-				s1 := oneOffTurn(Move{Kind: MoveOneOff, Card: pc(card.Four, card.Spades)})(t, s)
-				return mustApply(t, s1, Move{Kind: MoveDiscardPair, DiscardA: 1, DiscardB: 2})
-			},
+		{name: "Four", oneOff: pc(card.Four, card.Spades), wantPhase: PhaseAwaitingDiscard,
+			// P2's turn opens on the owed discard; the counter erases the debt.
+			p1Turn: oneOffTurn(Move{Kind: MoveOneOff, Card: pc(card.Four, card.Spades)}),
 			check: func(t *testing.T, played, after GameState) {
-				if !reflect.DeepEqual(played.Players[P2].Hand, []card.Card{crTwoC}) {
-					t.Fatalf("P2 should have discarded 10♠ and Q♥, hand=%v", played.Players[P2].Hand)
+				if played.Owed != [2]int{0, 2} || len(played.Players[P2].Hand) != 3 {
+					t.Fatalf("P2 should owe 2 with a full hand, owed=%v hand=%v", played.Owed, played.Players[P2].Hand)
 				}
-				if !reflect.DeepEqual(after.Players[P2].Hand, []card.Card{crTenS, crQH}) {
-					t.Errorf("discards not restored to P2's hand: %v", after.Players[P2].Hand)
+				if after.Owed != [2]int{} || !reflect.DeepEqual(after.Players[P2].Hand, []card.Card{crTenS, crQH}) {
+					t.Errorf("debt should disappear and P2 keep 10♠ Q♥: owed=%v hand=%v", after.Owed, after.Players[P2].Hand)
 				}
 			}},
 		{name: "Five", oneOff: pc(card.Five, card.Spades),
@@ -264,8 +264,8 @@ func TestCounterRewind_E3_ExactRestorePerRank(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s0 := mustApply(t, rewindBase(c.oneOff, crTwoC), Move{Kind: MoveDraw})
 			played := c.p1Turn(t, s0)
-			if played.Phase != PhaseNormal || played.Active != P2 {
-				t.Fatalf("P1's turn should end with P2 to move, phase=%v active=%v", played.Phase, played.Active)
+			if played.Phase != c.wantPhase || played.Active != P2 {
+				t.Fatalf("P1's turn should end with P2 to move, phase=%v (want %v) active=%v", played.Phase, c.wantPhase, played.Active)
 			}
 			if !played.LastTurn.Counterable {
 				t.Fatalf("P1's one-off turn should be counterable")
@@ -285,7 +285,8 @@ func TestCounterRewind_E1_TwinsSamePhaseAndActive(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			a := mustApply(t, rewindBase(c.oneOff, crTwoC), Move{Kind: MoveDraw})
 			b := mustApply(t, rewindBase(c.oneOff, twin), Move{Kind: MoveDraw})
-			// The one-off's own Apply (phase 2 for a 7, phase 3 for a 4).
+			// The one-off's own Apply (phase 2 for a 7; a 4 ends the turn
+			// into P2's owed discard in both twins).
 			m := Move{Kind: MoveOneOff, Card: c.oneOff, HandIndex: 0}
 			if lm, ok := findMove(LegalMoves(a), func(x Move) bool { return x.Kind == MoveOneOff && x.Card == c.oneOff }); ok {
 				m = lm
@@ -358,20 +359,21 @@ func TestCounterRewind_E2_WhenOffered(t *testing.T) {
 		}
 	})
 
-	t.Run("NeverOnFirstTurn", func(t *testing.T) {
+	t.Run("NeverOnFirstTurn_OpeningCounterable", func(t *testing.T) {
 		// The game's first turn: nothing to counter.
 		s := twoPlayerStart([]card.Card{crTwoC, ace}, []card.Card{pc(card.Two, card.Hearts)}, []card.Card{crQH})
 		if cm := counterMoves(s); len(cm) != 0 {
 			t.Errorf("no counter on the game's first turn, got %+v", cm)
 		}
-		// P2's first turn after P1's opening one-off: there is no end of a
-		// P2 turn to restore (TurnEnd[P2] is nil), so no counter either.
+		// Part B (ruled 2026-10-25): P2's first turn may counter P1's
+		// opening one-off; the rewind point is the dealt position.
 		s1 := mustApply(t, s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 1})
-		if !s1.LastTurn.Counterable || s1.TurnEnd[P2] != nil {
+		if !s1.LastTurn.Counterable || s1.TurnEnd[P2] == nil {
 			t.Fatalf("setup: last=%+v turnEnd[P2]=%v", s1.LastTurn, s1.TurnEnd[P2])
 		}
-		if cm := counterMoves(s1); len(cm) != 0 {
-			t.Errorf("no counter without TurnEnd[P2], got %+v", cm)
+		cm := counterMoves(s1)
+		if len(cm) != 1 || cm[0].Card != pc(card.Two, card.Hearts) {
+			t.Errorf("P2 should be offered 2♥ against the opening one-off, got %+v", cm)
 		}
 	})
 

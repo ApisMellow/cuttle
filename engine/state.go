@@ -64,6 +64,10 @@ const (
 	PhaseNormal Phase = iota
 	PhaseAwaitingCounter
 	PhaseSevenChoosing
+	// PhaseAwaitingDiscard is the turn-start step for an owed discard (Owed):
+	// Active pays two cards at a time, or counters the 4's turn, then plays
+	// on in PhaseNormal. With a Pending it is the v0.2.x shape, a discard
+	// inside the 4-player's turn (legacy saves only).
 	PhaseAwaitingDiscard
 	PhaseGameOver
 	// PhasePendingWin ("Not So Fast!"): the opponent reached their threshold
@@ -113,6 +117,10 @@ type GameState struct {
 	Pending      *PendingOneOff
 	PassesInARow int
 	Winner       *PlayerID
+	// Owed[p] is the number of cards p owes from a 4. It is a board field:
+	// snapshots save and restore it. p pays at the start of their turn
+	// (PhaseAwaitingDiscard with no Pending), two cards at a time.
+	Owed [2]int
 
 	// TurnEnd[p] is the position at the end of p's last turn, taken in
 	// endTurn after the handover and the freeze clear. A counter by p

@@ -16,9 +16,11 @@ var oneOffReference = []string{
 	"───────────────────────────",
 	"A  scrap ALL point cards",
 	"2  scrap any permanent, OR",
-	"   block a one-off",
+	"   counter: undo opp's",
+	"   one-off turn (turn start)",
 	"3  take a card from scrap",
-	"4  opponent discards 2",
+	"4  opp discards 2 at the",
+	"   start of their turn",
 	"5  draw 2 cards",
 	"6  scrap ALL permanents",
 	"7  reveal top 2, play one",
@@ -51,11 +53,34 @@ func Render(s engine.GameState) string {
 		}
 	} else {
 		fmt.Fprintf(&b, "\n*** P%d TO MOVE ***\n", s.Active+1)
-		if s.Phase != engine.PhaseNormal {
-			fmt.Fprintf(&b, "Phase: %v\n", s.Phase)
-		}
+		b.WriteString(statusLines(s))
 	}
 	return joinSideBySide(b.String(), strings.Join(oneOffReference, "\n"), 4)
+}
+
+// statusLines describes the turn-start steps and any owed discards. The menu
+// below the board is always LegalMoves, so these lines only explain it.
+func statusLines(s engine.GameState) string {
+	var b strings.Builder
+	switch {
+	case s.Phase == engine.PhasePendingWin:
+		fmt.Fprintf(&b, "Not So Fast! P%d reached their threshold; P%d may counter or let it happen\n",
+			s.Active.Other()+1, s.Active+1)
+	case s.Phase == engine.PhaseAwaitingDiscard && s.Pending == nil:
+		fmt.Fprintf(&b, "P%d starts the turn by paying the owed discard\n", s.Active+1)
+	case s.Phase != engine.PhaseNormal:
+		fmt.Fprintf(&b, "Phase: %v\n", s.Phase)
+	}
+	for _, p := range []engine.PlayerID{engine.P1, engine.P2} {
+		if n := s.Owed[p]; n > 0 {
+			noun := "discards"
+			if n == 1 {
+				noun = "discard"
+			}
+			fmt.Fprintf(&b, "P%d owes %d %s\n", p+1, n, noun)
+		}
+	}
+	return b.String()
 }
 
 // joinSideBySide places right beside left, separated by `gap` spaces.

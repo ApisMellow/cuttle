@@ -60,3 +60,17 @@ func TestDescribe_AllKinds(t *testing.T) {
 		}
 	}
 }
+
+// Decline reads "Let it happen" at a pending win; the legacy phase-1 Decline
+// keeps "decline to counter".
+func TestDescribe_DeclineByPhase(t *testing.T) {
+	s := twoPlayerStart(nil, nil, nil)
+	s.Phase = PhasePendingWin
+	if got := (Move{Kind: MoveDecline}).Describe(s); got != "Let it happen" {
+		t.Errorf("pending win: %q", got)
+	}
+	s.Phase = PhaseAwaitingCounter
+	if got := (Move{Kind: MoveDecline}).Describe(s); got != "decline to counter" {
+		t.Errorf("legacy window: %q", got)
+	}
+}

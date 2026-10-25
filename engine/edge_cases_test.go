@@ -215,13 +215,12 @@ func caseD19(t *testing.T) {
 }
 
 // caseC13: Playing a 4 when the opponent has 0 cards in hand is legal and
-// auto-resolves with no discards. The engine skips PhaseAwaitingDiscard
-// entirely, scraps the 4, and ends P1's turn normally.
+// resolves with no discards. P1's turn ends with Owed[P2] = 2; at P2's turn
+// start the empty hand pays nothing and the debt clears, so P2 opens in
+// PhaseNormal.
 //
 // JUDGMENT: RULES.md says "If their hand has fewer than 2 cards, they
-// discard whatever they have" — zero cards means zero discards. The
-// engine's Four handler short-circuits when opp hand is empty and falls
-// through to the normal end-of-one-off cleanup, which matches.
+// discard whatever they have" — zero cards means zero discards.
 func caseC13(t *testing.T) {
 	four := card.Card{Rank: card.Four, Suit: card.Spades}
 	s := twoPlayerStart([]card.Card{four}, nil, nil)
@@ -255,11 +254,11 @@ func caseC13(t *testing.T) {
 	}
 }
 
-// caseC14: Playing a 4 when the opponent has exactly 1 card. The engine
-// enters PhaseAwaitingDiscard with a single legal MoveDiscardPair whose
-// DiscardB sentinel is -1 (single-card discard). After applying it, the
-// opponent's hand is empty, scrap holds {4, discarded}, and phase returns
-// to PhaseNormal.
+// caseC14: Playing a 4 when the opponent has exactly 1 card. P2's turn opens
+// in PhaseAwaitingDiscard with a single legal MoveDiscardPair whose DiscardB
+// sentinel is -1 (single-card discard). After applying it, the opponent's
+// hand is empty, scrap holds {4, discarded}, and P2's turn goes on in
+// PhaseNormal.
 func caseC14(t *testing.T) {
 	four := card.Card{Rank: card.Four, Suit: card.Spades}
 	lone := card.Card{Rank: card.Nine, Suit: card.Hearts}
@@ -301,8 +300,8 @@ func caseC14(t *testing.T) {
 }
 
 // caseC15: Standard case — opponent has exactly 2 cards and the only legal
-// discard move is the pair (0,1), removing both. Scrap ends with {4, c0, c1}
-// and opponent hand is empty.
+// discard move at the start of their turn is the pair (0,1), removing both.
+// Scrap ends with {4, c0, c1} and opponent hand is empty.
 func caseC15(t *testing.T) {
 	four := card.Card{Rank: card.Four, Suit: card.Spades}
 	c0 := card.Card{Rank: card.Nine, Suit: card.Hearts}

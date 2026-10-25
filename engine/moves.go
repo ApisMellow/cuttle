@@ -57,6 +57,9 @@ func (m Move) Describe(s GameState) string {
 	case MoveCounter:
 		return fmt.Sprintf("counter with %s", m.Card)
 	case MoveDecline:
+		if s.Phase == PhasePendingWin {
+			return "Let it happen"
+		}
 		return "decline to counter"
 	case MoveSevenPick:
 		if m.SubMove != nil {
