@@ -6,7 +6,10 @@ import (
 	"github.com/ApisMellow/cuttle/card"
 )
 
-// Task 17: Four one-off — opponent discards 2 cards.
+// Task 17: Four one-off — opponent discards 2 cards. Since v0.3.0 the 4 ends
+// P1's turn with Owed[P2] = 2, and P2 pays at the start of their own turn
+// (PhaseAwaitingDiscard, no Pending), then plays on. See owed_discard_test.go
+// for the counter sequences.
 
 func TestFour_FiveCardOpponentHand_EnumeratesAllUnorderedPairs(t *testing.T) {
 	four := card.Card{Rank: card.Four, Suit: card.Spades}
@@ -28,6 +31,9 @@ func TestFour_FiveCardOpponentHand_EnumeratesAllUnorderedPairs(t *testing.T) {
 	}
 	if s2.Active != P2 {
 		t.Fatalf("expected Active=P2 (discarding player), got %v", s2.Active)
+	}
+	if s2.Owed != [2]int{0, 2} || s2.Pending != nil || s2.TurnEnd[P1] == nil {
+		t.Fatalf("P1's turn should end with P2 owing 2: owed=%v pending=%v", s2.Owed, s2.Pending)
 	}
 
 	moves := LegalMoves(s2)
@@ -65,10 +71,9 @@ func TestFour_FiveCardOpponentHand_EnumeratesAllUnorderedPairs(t *testing.T) {
 	if s3.Phase != PhaseNormal {
 		t.Errorf("expected PhaseNormal after discard resolved, got %v", s3.Phase)
 	}
-	// After endTurn, Active flips back to P2 (since the 4 was played by P1,
-	// discard by P2, then endTurn → P2's turn).
-	if s3.Active != P2 {
-		t.Errorf("expected Active=P2 after endTurn, got %v", s3.Active)
+	// Paying is the start of P2's own turn, which goes on.
+	if s3.Active != P2 || s3.Owed != [2]int{} || s3.TurnEnd != s2.TurnEnd {
+		t.Errorf("expected P2's turn to continue with the debt paid, active=%v owed=%v", s3.Active, s3.Owed)
 	}
 }
 
@@ -105,8 +110,8 @@ func TestFour_OneCardOpponentHand_SingleDiscard(t *testing.T) {
 	if len(s3.Scrap) != 2 {
 		t.Errorf("expected scrap size 2, got %d", len(s3.Scrap))
 	}
-	if s3.Phase != PhaseNormal {
-		t.Errorf("expected PhaseNormal, got %v", s3.Phase)
+	if s3.Phase != PhaseNormal || s3.Active != P2 || s3.Owed != [2]int{} {
+		t.Errorf("expected P2's normal turn with no debt, got phase=%v active=%v owed=%v", s3.Phase, s3.Active, s3.Owed)
 	}
 }
 
@@ -119,9 +124,9 @@ func TestFour_ZeroCardOpponentHand_AutoResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Empty hand → auto-resume (skip discard phase entirely).
-	if s2.Phase != PhaseNormal {
-		t.Errorf("expected PhaseNormal (auto-resume on empty hand), got %v", s2.Phase)
+	// Empty hand → pays nothing; the debt clears at P2's turn start.
+	if s2.Phase != PhaseNormal || s2.Owed != [2]int{} {
+		t.Errorf("expected PhaseNormal with no debt (empty hand), got %v owed=%v", s2.Phase, s2.Owed)
 	}
 	// The 4 should be in scrap.
 	if len(s2.Scrap) != 1 || s2.Scrap[0] != four {

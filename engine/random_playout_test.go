@@ -37,7 +37,7 @@ func dealRandomPlayout(rng *rand.Rand) GameState {
 // countAllCards tallies every card visible in every zone of the state.
 // Pending.Card and Pending.CounterChain are live (removed from hands, not
 // yet scrapped) only while a counter window is open; in PhaseSevenChoosing
-// and PhaseAwaitingDiscard the one-off itself has already been scrapped.
+// the one-off itself has already been scrapped.
 // Pending.Revealed cards have been removed from the deck.
 func countAllCards(s GameState) map[card.Card]int {
 	counts := make(map[card.Card]int, 52)
@@ -82,8 +82,13 @@ func checkPlayoutInvariants(t *testing.T, s GameState, seed int64, step int) {
 		}
 	}
 
-	// Pending is set exactly in the phases that require it.
-	pendingPhase := s.Phase == PhaseAwaitingCounter || s.Phase == PhaseSevenChoosing || s.Phase == PhaseAwaitingDiscard
+	// Pending is set exactly in the phases that require it. New play reaches
+	// PhaseAwaitingDiscard only as the owed-discard step: no Pending, a debt,
+	// and cards to pay it with.
+	pendingPhase := s.Phase == PhaseAwaitingCounter || s.Phase == PhaseSevenChoosing
+	if s.Phase == PhaseAwaitingDiscard && (s.Owed[s.Active] <= 0 || len(s.Players[s.Active].Hand) == 0) {
+		t.Fatalf("seed %d step %d: owed-discard step with owed=%v hand=%v", seed, step, s.Owed, s.Players[s.Active].Hand)
+	}
 	if pendingPhase && s.Pending == nil {
 		t.Fatalf("seed %d step %d: phase %d requires Pending, got nil", seed, step, s.Phase)
 	}
@@ -105,6 +110,24 @@ func checkPlayoutInvariants(t *testing.T, s GameState, seed int64, step int) {
 	} else if s.Winner != nil {
 		t.Fatalf("seed %d step %d: winner set but phase is %d", seed, step, s.Phase)
 	}
+
+	// A pending win is held by the player who reached their threshold, and
+	// the decider can counter it.
+	if s.Phase == PhasePendingWin {
+		if !HasWon(s.Players[s.Active.Other()]) || !s.LastTurn.Counterable {
+			t.Fatalf("seed %d step %d: pending win for P%d, who has not won on a counterable turn", seed, step, s.Active.Other()+1)
+		}
+		if !hasLegalCounter(s.Players[s.Active]) {
+			t.Fatalf("seed %d step %d: pending win, but P%d holds no unfrozen 2", seed, step, s.Active+1)
+		}
+	}
+
+	// Counter-rewind snapshots are one level deep.
+	for p, snap := range s.TurnEnd {
+		if snap != nil && (snap.TurnEnd[P1] != nil || snap.TurnEnd[P2] != nil) {
+			t.Fatalf("seed %d step %d: TurnEnd[%d] carries its own snapshots", seed, step, p)
+		}
+	}
 }
 
 // TestRandomPlayouts plays full games choosing uniformly among LegalMoves,
@@ -113,6 +136,21 @@ func checkPlayoutInvariants(t *testing.T, s GameState, seed int64, step int) {
 // coherent result.
 func TestRandomPlayouts(t *testing.T) {
 	const games = 500
+	counters, pendingWins, owedDiscards := 0, 0, 0
+	defer func() {
+		// So must the owed discard (a 4's debt paid at turn start).
+		if !t.Failed() && owedDiscards == 0 {
+			t.Errorf("no game reached an owed discard in %d games", games)
+		}
+		// Counter rewinds must actually be in play, not just offered.
+		if !t.Failed() && counters == 0 {
+			t.Errorf("no counter was applied in %d games", games)
+		}
+		// So must the pending win ("Not So Fast!").
+		if !t.Failed() && pendingWins == 0 {
+			t.Errorf("no game reached PhasePendingWin in %d games", games)
+		}
+	}()
 	for seed := int64(1); seed <= games; seed++ {
 		rng := rand.New(rand.NewSource(seed))
 		s := dealRandomPlayout(rng)
@@ -129,12 +167,19 @@ func TestRandomPlayouts(t *testing.T) {
 			}
 			// Every generated move must be applicable without error.
 			for i, m := range moves {
+				// The public flag must agree with every offered counter.
+				if m.Kind == MoveCounter && !CounterAvailable(s) {
+					t.Fatalf("seed %d step %d: MoveCounter offered but CounterAvailable is false", seed, step)
+				}
 				if _, err := Apply(s, m); err != nil {
 					t.Fatalf("seed %d step %d: legal move %d (%s) rejected by Apply: %v",
 						seed, step, i, m.Describe(s), err)
 				}
 			}
 			m := moves[rng.Intn(len(moves))]
+			if m.Kind == MoveCounter {
+				counters++
+			}
 			before := clone(s)
 			next, err := Apply(s, m)
 			if err != nil {
@@ -146,6 +191,12 @@ func TestRandomPlayouts(t *testing.T) {
 				t.Fatalf("seed %d step %d: Apply mutated its input state (move: %s)", seed, step, m.Describe(s))
 			}
 			s = next
+			if s.Phase == PhasePendingWin {
+				pendingWins++
+			}
+			if s.Phase == PhaseAwaitingDiscard {
+				owedDiscards++
+			}
 			checkPlayoutInvariants(t, s, seed, step)
 		}
 	}
