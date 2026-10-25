@@ -139,10 +139,8 @@ func TestTwoScrap_CounterChain(t *testing.T) {
 	s.Players[P2].Permanents = []card.Card{king}
 
 	tgt := Target{Owner: P2, Zone: ZonePermanents, Index: 0}
-	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: twoA, HandIndex: 0, Target: &tgt})
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Legacy phase-1 path (v0.2.x mid-window save); see counter_test.go.
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: twoA, HandIndex: 0, Target: &tgt})
 	if s1.Phase != PhaseAwaitingCounter {
 		t.Fatalf("expected PhaseAwaitingCounter, got %d", s1.Phase)
 	}

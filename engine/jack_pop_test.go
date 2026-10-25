@@ -297,7 +297,8 @@ func TestTwoPop_BuriedJacksNotTargetable(t *testing.T) {
 }
 
 // The same ruling holds when the 2 resolves after the opponent declines a
-// counter (resolvePending path rather than the immediate path).
+// counter (resolvePending path rather than the immediate path). Legacy
+// phase-1 state, built directly (see openLegacyWindow).
 func TestTwoPop_ResolvesAfterCounterDeclined(t *testing.T) {
 	seven := pc(card.Seven, card.Diamonds)
 	oppTwo := pc(card.Two, card.Hearts)
@@ -306,10 +307,7 @@ func TestTwoPop_ResolvesAfterCounterDeclined(t *testing.T) {
 		{Card: seven, Owner: P2, JackStack: []card.Card{popJC, popJH}, JackOwners: []PlayerID{P1, P2}},
 	}
 	tgt := Target{Owner: P2, Zone: ZonePoints, Index: 0}
-	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: popTwo, HandIndex: 0, Target: &tgt})
-	if err != nil {
-		t.Fatalf("apply 2: %v", err)
-	}
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: popTwo, HandIndex: 0, Target: &tgt})
 	if s1.Phase != PhaseAwaitingCounter {
 		t.Fatalf("expected PhaseAwaitingCounter, got %v", s1.Phase)
 	}
@@ -343,10 +341,7 @@ func TestTwoPop_CounteredLeavesFieldUntouched(t *testing.T) {
 	}
 	// Invariant repair for setup: top Jack is P2's, so the entry stays on P2.
 	tgt := Target{Owner: P2, Zone: ZonePoints, Index: 0}
-	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: popTwo, HandIndex: 0, Target: &tgt})
-	if err != nil {
-		t.Fatalf("apply 2: %v", err)
-	}
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: popTwo, HandIndex: 0, Target: &tgt})
 	s2, err := Apply(s1, Move{Kind: MoveCounter, Card: oppTwo, HandIndex: 0})
 	if err != nil {
 		t.Fatalf("counter: %v", err)

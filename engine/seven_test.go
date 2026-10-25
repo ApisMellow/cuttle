@@ -165,19 +165,22 @@ func TestSeven_PickOneOffCanBeCountered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Because P2 has a 2, the inner Ace should enter PhaseAwaitingCounter.
-	if s3.Phase != PhaseAwaitingCounter {
-		t.Errorf("expected PhaseAwaitingCounter after picking ace, got %v", s3.Phase)
+	// v0.3.0: the picked Ace resolves at once even though P2 holds a 2; the
+	// turn is counterable, and P2 may counter it at the start of its turn.
+	if s3.Phase != PhaseNormal || s3.Pending != nil {
+		t.Errorf("expected PhaseNormal with no pending after picking ace, got phase=%v pending=%+v", s3.Phase, s3.Pending)
 	}
 	if s3.Active != P2 {
-		t.Errorf("expected P2 active for counter, got %v", s3.Active)
+		t.Errorf("expected P2's turn, got %v", s3.Active)
 	}
 	// King was returned to top of deck before dispatch.
 	if len(s3.Deck) != 1 || s3.Deck[0] != king {
 		t.Errorf("expected king on deck, got %+v", s3.Deck)
 	}
-	if s3.Pending == nil || s3.Pending.Card != ace {
-		t.Errorf("expected ace pending, got %+v", s3.Pending)
+	// The pick came from the deck, so it is not a countered card; this state
+	// was built in phase 2, so the 7 itself was never recorded either.
+	if !s3.LastTurn.Counterable || len(s3.LastTurn.Countered) != 0 {
+		t.Errorf("LastTurn = %+v, want counterable with no countered cards", s3.LastTurn)
 	}
 }
 

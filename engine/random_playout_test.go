@@ -105,6 +105,13 @@ func checkPlayoutInvariants(t *testing.T, s GameState, seed int64, step int) {
 	} else if s.Winner != nil {
 		t.Fatalf("seed %d step %d: winner set but phase is %d", seed, step, s.Phase)
 	}
+
+	// Counter-rewind snapshots are one level deep.
+	for p, snap := range s.TurnEnd {
+		if snap != nil && (snap.TurnEnd[P1] != nil || snap.TurnEnd[P2] != nil) {
+			t.Fatalf("seed %d step %d: TurnEnd[%d] carries its own snapshots", seed, step, p)
+		}
+	}
 }
 
 // TestRandomPlayouts plays full games choosing uniformly among LegalMoves,
@@ -113,6 +120,13 @@ func checkPlayoutInvariants(t *testing.T, s GameState, seed int64, step int) {
 // coherent result.
 func TestRandomPlayouts(t *testing.T) {
 	const games = 500
+	counters := 0
+	defer func() {
+		// Counter rewinds must actually be in play, not just offered.
+		if !t.Failed() && counters == 0 {
+			t.Errorf("no counter was applied in %d games", games)
+		}
+	}()
 	for seed := int64(1); seed <= games; seed++ {
 		rng := rand.New(rand.NewSource(seed))
 		s := dealRandomPlayout(rng)
@@ -135,6 +149,9 @@ func TestRandomPlayouts(t *testing.T) {
 				}
 			}
 			m := moves[rng.Intn(len(moves))]
+			if m.Kind == MoveCounter {
+				counters++
+			}
 			before := clone(s)
 			next, err := Apply(s, m)
 			if err != nil {

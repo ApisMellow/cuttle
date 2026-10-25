@@ -55,7 +55,7 @@ type PlayerState struct {
 	Hand       []card.Card
 	Points     []PointEntry // points currently controlled by this player
 	Permanents []card.Card  // Queens, Kings, glasses-8s only (NOT Jacks)
-	FrozenIDs  map[int]bool // hand indices frozen by an opponent's 9 last turn
+	FrozenIDs  map[int]bool // hand indices frozen by a 9 for the turn that started right after it
 }
 
 type Phase uint8
@@ -90,6 +90,15 @@ type PendingOneOff struct {
 	CounterChain []card.Card
 }
 
+// TurnRecord describes one turn for the counter rewind: whether it can be
+// countered (it began with a counter or played a one-off from hand), and the
+// countered cards (the counter 2 and the one-off played from hand, in play
+// order; at most two).
+type TurnRecord struct {
+	Counterable bool
+	Countered   []card.Card
+}
+
 type GameState struct {
 	Players      [2]PlayerState
 	Deck         []card.Card // index 0 = top
@@ -99,4 +108,17 @@ type GameState struct {
 	Pending      *PendingOneOff
 	PassesInARow int
 	Winner       *PlayerID
+
+	// TurnEnd[p] is the position at the end of p's last turn, taken in
+	// endTurn after the handover and the freeze clear. A counter by p
+	// restores TurnEnd[p]; a restore never overwrites a snapshot. Depth is
+	// one: a snapshot's own TurnEnd is nil.
+	TurnEnd [2]*GameState
+	// LastTurn records the turn that ended most recently: in live play, the
+	// opponent's last turn (what the active player may counter); in a
+	// snapshot, the turn that ended there.
+	LastTurn TurnRecord
+	// ThisTurn accumulates the record of the turn in progress. endTurn moves
+	// it into LastTurn.
+	ThisTurn TurnRecord
 }

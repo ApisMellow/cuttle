@@ -6,7 +6,32 @@ import (
 	"github.com/ApisMellow/cuttle/card"
 )
 
-// Task 14: counter logic via PhaseAwaitingCounter.
+// Task 14: counter logic via PhaseAwaitingCounter. Since v0.3.0 new play
+// never enters that phase (one-offs take effect at once; see
+// counter_rewind_test.go); these tests cover the legacy path from a phase-1
+// state built directly, as a v0.2.x save made mid-window would hold.
+
+// openLegacyWindow builds the v0.2.x phase-1 state that one-off m used to
+// open when the opponent held an unfrozen 2.
+func openLegacyWindow(t *testing.T, s GameState, m Move) GameState {
+	t.Helper()
+	out := clone(s)
+	p := &out.Players[out.Active]
+	if m.HandIndex < 0 || m.HandIndex >= len(p.Hand) || p.Hand[m.HandIndex] != m.Card {
+		t.Fatalf("openLegacyWindow: %v not at hand[%d]", m.Card, m.HandIndex)
+	}
+	removeFromHand(p, m.HandIndex)
+	out.PassesInARow = 0
+	out.Pending = &PendingOneOff{
+		PlayedBy:   out.Active,
+		Card:       m.Card,
+		Target:     m.Target,
+		ScrapIndex: m.ScrapIndex,
+	}
+	out.Phase = PhaseAwaitingCounter
+	out.Active = out.Active.Other()
+	return out
+}
 
 func hasCounterMove(moves []Move, idx int) bool {
 	for _, m := range moves {
@@ -56,10 +81,7 @@ func TestCounter_AceVsOneTwo_Cancelled(t *testing.T) {
 		{Card: card.Card{Rank: card.Seven, Suit: card.Hearts}, Owner: P1},
 	}
 
-	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
 	if s1.Phase != PhaseAwaitingCounter {
 		t.Fatalf("expected PhaseAwaitingCounter, got %d", s1.Phase)
 	}
@@ -107,10 +129,7 @@ func TestCounter_AceVsTwoThenTwo_Resolves(t *testing.T) {
 		{Card: card.Card{Rank: card.Seven, Suit: card.Hearts}, Owner: P1},
 	}
 
-	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
 	// Now P1 hand is [two2]. P2 hand is [two1]. Waiting: P2.
 	if s1.Active != P2 || s1.Phase != PhaseAwaitingCounter {
 		t.Fatal("expected awaiting counter, P2 to act")
@@ -157,7 +176,7 @@ func TestCounter_Decline_ResolvesImmediately(t *testing.T) {
 	s.Players[P1].Points = []PointEntry{
 		{Card: card.Card{Rank: card.Seven, Suit: card.Hearts}, Owner: P1},
 	}
-	s1, _ := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
 	s2, err := Apply(s1, Move{Kind: MoveDecline})
 	if err != nil {
 		t.Fatal(err)

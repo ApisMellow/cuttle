@@ -131,11 +131,35 @@ func LegalMoves(s GameState) []Move {
 	if len(moves) == 0 {
 		moves = append(moves, Move{Kind: MovePass})
 	}
+	// Counters go last: cuttle-web's replay scenarios index into this slice,
+	// so the moves above must keep their positions.
+	if counterAvailable(s) {
+		for i, c := range active.Hand {
+			if c.Rank == card.Two && !active.FrozenIDs[i] {
+				moves = append(moves, Move{Kind: MoveCounter, Card: c, HandIndex: i})
+			}
+		}
+	}
 	return moves
+}
+
+// counterAvailable reports whether the active player may open their turn in
+// PhaseNormal with a counter: the opponent's last turn was counterable, no
+// move has been made this turn yet, and there is a position to restore (the
+// end of the active player's own last turn; absent on their first turn).
+func counterAvailable(s GameState) bool {
+	return s.Phase == PhaseNormal && s.LastTurn.Counterable &&
+		!s.ThisTurn.Counterable && s.TurnEnd[s.Active] != nil
 }
 
 // Apply validates the move (must appear in LegalMoves(s)) and returns the new state.
 func Apply(s GameState, m Move) (GameState, error) {
+	return apply(s, m, false)
+}
+
+// apply is Apply; fromSeven is true for a 7's pick, whose card came from the
+// deck rather than the hand and so is not a countered card.
+func apply(s GameState, m Move, fromSeven bool) (GameState, error) {
 	if s.Phase == PhaseGameOver {
 		return s, ErrIllegalMove
 	}
@@ -324,22 +348,20 @@ func Apply(s GameState, m Move) (GameState, error) {
 		played := out.Active
 		removeFromHand(p, m.HandIndex)
 		out.PassesInARow = 0
-		// If the opponent has a non-frozen 2, enter PhaseAwaitingCounter.
-		opp := played.Other()
-		if hasLegalCounter(out.Players[opp]) {
-			out.Pending = &PendingOneOff{
-				PlayedBy:   played,
-				Card:       m.Card,
-				Target:     m.Target,
-				ScrapIndex: m.ScrapIndex,
-			}
-			out.Phase = PhaseAwaitingCounter
-			out.Active = opp
-			return out, nil
+		// A one-off takes effect at once; the opponent may counter it at the
+		// start of their turn (counter rewind). New play never enters
+		// PhaseAwaitingCounter.
+		out.ThisTurn.Counterable = true
+		if !fromSeven {
+			out.ThisTurn.Countered = append(out.ThisTurn.Countered, m.Card)
 		}
 		resolveOneOffWith(&out, m.Card, played, m.ScrapIndex, m.Target)
 		return out, nil
 	case MoveCounter:
+		if s.Phase == PhaseNormal {
+			return applyRewind(s, m)
+		}
+		// Legacy: a v0.2.x state saved mid-window.
 		if s.Phase != PhaseAwaitingCounter || out.Pending == nil {
 			return s, ErrIllegalMove
 		}
@@ -465,7 +487,7 @@ func Apply(s GameState, m Move) (GameState, error) {
 		sub := *m.SubMove
 		sub.Card = m.Card
 		sub.HandIndex = injectIdx
-		return Apply(out, sub)
+		return apply(out, sub, true)
 	case MoveDecline:
 		if s.Phase != PhaseAwaitingCounter || out.Pending == nil {
 			return s, ErrIllegalMove
@@ -474,6 +496,64 @@ func Apply(s GameState, m Move) (GameState, error) {
 		return out, nil
 	}
 	return s, ErrIllegalMove
+}
+
+// applyRewind plays a counter as the first action of the active player's
+// turn. The game goes back to TurnEnd[counterer] (the end of the counterer's
+// own last turn, which is the start of the opponent's erased turn). Each
+// countered card still in the opponent's hand there goes to the scrap, in
+// play order, then the counterer's 2 on top. All frozen marks are cleared,
+// and the counterer goes on to take a normal turn, which is counterable
+// because it began with a counter. TurnEnd is left untouched.
+func applyRewind(s GameState, m Move) (GameState, error) {
+	if !counterAvailable(s) || m.Card.Rank != card.Two {
+		return s, ErrIllegalMove
+	}
+	cp := s.Players[s.Active]
+	if m.HandIndex < 0 || m.HandIndex >= len(cp.Hand) || cp.Hand[m.HandIndex] != m.Card {
+		return s, ErrIllegalMove
+	}
+	if cp.FrozenIDs[m.HandIndex] {
+		return s, ErrIllegalMove
+	}
+	counterer := s.Active
+	opp := counterer.Other()
+	out := clone(*s.TurnEnd[counterer])
+	// The counterer's 2 is always in their hand at the snapshot: the only 2s
+	// that reach a hand during the opponent's turn come back through a 9,
+	// and those are frozen.
+	if handIndexOf(out.Players[counterer].Hand, m.Card) < 0 {
+		return s, ErrIllegalMove
+	}
+	for _, c := range s.LastTurn.Countered {
+		if i := handIndexOf(out.Players[opp].Hand, c); i >= 0 {
+			removeFromHand(&out.Players[opp], i)
+			out.Scrap = append(out.Scrap, c)
+		}
+	}
+	removeFromHand(&out.Players[counterer], handIndexOf(out.Players[counterer].Hand, m.Card))
+	out.Scrap = append(out.Scrap, m.Card)
+	out.Players[P1].FrozenIDs = nil
+	out.Players[P2].FrozenIDs = nil
+	out.PassesInARow = 0
+	out.Active = counterer
+	out.Phase = PhaseNormal
+	out.Pending = nil
+	out.Winner = nil
+	out.TurnEnd = s.TurnEnd
+	// The opponent's turn is erased, so there is nothing left to counter.
+	out.LastTurn = TurnRecord{}
+	out.ThisTurn = TurnRecord{Counterable: true, Countered: []card.Card{m.Card}}
+	return out, nil
+}
+
+func handIndexOf(hand []card.Card, c card.Card) int {
+	for i, h := range hand {
+		if h == c {
+			return i
+		}
+	}
+	return -1
 }
 
 // ownerHasQueen reports whether p has at least one Queen permanent.
@@ -759,14 +839,13 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 			tp.Permanents = removeAt(tp.Permanents, target.Index)
 			returnTo = target.Owner
 		}
-		// End turn FIRST so endTurn's frozen-clear on the new active player
-		// doesn't wipe the freeze we're about to set. endTurn's start-of-turn
-		// win check runs before the card returns to hand; that is safe
-		// because a card in hand never counts toward points.
-		endTurn(s)
+		// Return the card, then end the turn, then freeze it: endTurn's
+		// snapshot must hold the card in hand, and its frozen-clear must not
+		// wipe the mark, which lasts for the turn starting now and no other.
 		rp := &s.Players[returnTo]
 		rp.Hand = append(rp.Hand, returned)
 		frozenIdx := len(rp.Hand) - 1
+		endTurn(s)
 		if rp.FrozenIDs == nil {
 			rp.FrozenIDs = map[int]bool{}
 		}
@@ -825,18 +904,30 @@ func checkWin(s *GameState, p PlayerID) bool {
 	return false
 }
 
-// endTurn advances Active, clears the new active player's frozen marks, then
-// runs the start-of-turn win check. A player can reach their threshold during
-// the opponent's turn (the opponent pops their own Jack with a 2, or plays a
-// 6); there is no off-turn win, so that player wins here, as their turn
-// begins and before LegalMoves offers them anything.
+// endTurn closes the outgoing player's turn and starts the next one:
+//  1. ThisTurn moves into LastTurn.
+//  2. Active hands over.
+//  3. The freeze rule: both players' frozen marks are cleared (a 9 sets its
+//     new mark after endTurn returns).
+//  4. The snapshot TurnEnd[outgoing] is taken, one level deep.
+//  5. The start-of-turn win check. A player can reach their threshold during
+//     the opponent's turn (the opponent pops their own Jack with a 2, or
+//     plays a 6); there is no off-turn win, so that player wins here, as
+//     their turn begins and before LegalMoves offers them anything.
 //
-// endTurn is the only place a turn begins. A counter window flips Active
-// without calling it, so this check never fires mid-chain; it runs once the
+// endTurn is the only place a turn begins. A legacy counter window flips
+// Active without calling it, so this never fires mid-chain; it runs once the
 // chain has resolved and the turn actually passes.
 func endTurn(s *GameState) {
-	s.Active = s.Active.Other()
-	s.Players[s.Active].FrozenIDs = nil
+	outgoing := s.Active
+	s.LastTurn = s.ThisTurn
+	s.ThisTurn = TurnRecord{}
+	s.Active = outgoing.Other()
+	s.Players[P1].FrozenIDs = nil
+	s.Players[P2].FrozenIDs = nil
+	snap := clone(*s)
+	snap.TurnEnd = [2]*GameState{}
+	s.TurnEnd[outgoing] = &snap
 	checkWin(s, s.Active)
 }
 
@@ -861,6 +952,10 @@ func clone(s GameState) GameState {
 		w := *s.Winner
 		out.Winner = &w
 	}
+	// TurnEnd snapshots are never mutated after endTurn takes them, so the
+	// pointers are shared rather than copied.
+	out.LastTurn.Countered = append([]card.Card(nil), s.LastTurn.Countered...)
+	out.ThisTurn.Countered = append([]card.Card(nil), s.ThisTurn.Countered...)
 	return out
 }
 

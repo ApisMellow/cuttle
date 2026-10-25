@@ -14,7 +14,8 @@ import (
 //
 // A counter window is not a turn. The player answering a counter is Active,
 // but their turn has not begun; it begins only once the chain resolves and
-// the turn passes.
+// the turn passes. (Since v0.3.0 new play never opens a counter window; the
+// window tests below start from a legacy phase-1 state built directly.)
 
 var (
 	wtTwoH  = pc(card.Two, card.Hearts)
@@ -77,7 +78,7 @@ func wantNoWin(t *testing.T, s GameState, phase Phase, active PlayerID) {
 // P2 wins at the start of it.
 func TestWinTiming_PopAfterDecline_OpponentWinsAtTurnStart(t *testing.T) {
 	s := popOwnJackState([]card.Card{popTwo}, []card.Card{wtTwoH}, []card.Card{wtKingD})
-	s1 := mustApply(t, s, Move{Kind: MoveOneOff, Card: popTwo, HandIndex: 0, Target: &popOwnJackTarget})
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: popTwo, HandIndex: 0, Target: &popOwnJackTarget})
 	wantNoWin(t, s1, PhaseAwaitingCounter, P2)
 
 	s2 := mustApply(t, s1, Move{Kind: MoveDecline})
@@ -92,7 +93,7 @@ func TestWinTiming_PopAfterDecline_OpponentWinsAtTurnStart(t *testing.T) {
 // resolves the pop, then the turn passes and P2 wins.
 func TestWinTiming_PopResolvesThroughEvenChain_WinsOnlyAfterChain(t *testing.T) {
 	s := popOwnJackState([]card.Card{popTwo, wtTwoD}, []card.Card{wtTwoH, wtTwoC}, []card.Card{wtKingD})
-	s1 := mustApply(t, s, Move{Kind: MoveOneOff, Card: popTwo, HandIndex: 0, Target: &popOwnJackTarget})
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: popTwo, HandIndex: 0, Target: &popOwnJackTarget})
 	wantNoWin(t, s1, PhaseAwaitingCounter, P2)
 
 	s2 := mustApply(t, s1, Move{Kind: MoveCounter, Card: wtTwoH, HandIndex: 0})
@@ -109,7 +110,7 @@ func TestWinTiming_PopResolvesThroughEvenChain_WinsOnlyAfterChain(t *testing.T) 
 // takes its turn.
 func TestWinTiming_PopCancelledByOddChain_NoWin(t *testing.T) {
 	s := popOwnJackState([]card.Card{popTwo}, []card.Card{wtTwoH}, []card.Card{wtKingD})
-	s1 := mustApply(t, s, Move{Kind: MoveOneOff, Card: popTwo, HandIndex: 0, Target: &popOwnJackTarget})
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: popTwo, HandIndex: 0, Target: &popOwnJackTarget})
 	s2 := mustApply(t, s1, Move{Kind: MoveCounter, Card: wtTwoH, HandIndex: 0})
 	wantNoWin(t, s2, PhaseNormal, P2)
 	if PointTotal(s2.Players[P2]) != 6 {
@@ -127,7 +128,7 @@ func TestWinTiming_NoWinInsideCounterWindow(t *testing.T) {
 	s.Players[P2].Points = []PointEntry{{Card: pc(card.Ten, card.Clubs), Owner: P2}, {Card: pc(card.Nine, card.Clubs), Owner: P2}}
 	s.Players[P2].Permanents = []card.Card{wtKingD}
 
-	s1 := mustApply(t, s, Move{Kind: MoveOneOff, Card: five, HandIndex: 0})
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: five, HandIndex: 0})
 	wantNoWin(t, s1, PhaseAwaitingCounter, P2)
 
 	s2 := mustApply(t, s1, Move{Kind: MoveCounter, Card: wtTwoH, HandIndex: 0})

@@ -197,11 +197,9 @@ func TestScenario_CounterChainTriple(t *testing.T) {
 		t.Fatal("expected MoveOneOff Ace in legal moves")
 	}
 
-	// P1 plays Ace → P2 awaiting counter.
-	s1, err := Apply(s, playAce)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// P1 plays Ace → P2 awaiting counter. Legacy phase-1 path (v0.2.x
+	// mid-window save), built directly; new play resolves the Ace at once.
+	s1 := openLegacyWindow(t, s, playAce)
 	if s1.Phase != PhaseAwaitingCounter || s1.Active != P2 {
 		t.Fatalf("after Ace: phase=%v active=%v", s1.Phase, s1.Active)
 	}

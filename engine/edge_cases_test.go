@@ -61,7 +61,7 @@ func TestEdgeCases(t *testing.T) {
 		t.Run("33c_FrozenCardCannotScuttle", caseH33c)
 		t.Run("33d_FrozenCardCannotBeOneOff", caseH33d)
 		t.Run("33e_FrozenCardCannotCounter", caseH33e)
-		t.Run("34_FreezeClearsAtStartOfAffectedOwnNextTurn", caseH34)
+		t.Run("34_FreezeLastsOnlyTheTurnAfterTheNine", caseH34)
 	})
 	t.Run("I_Stalemate", func(t *testing.T) {
 		t.Run("35_ThreeConsecutivePassesEndGame", caseI35)
@@ -809,10 +809,8 @@ func caseE20(t *testing.T) {
 		{Card: card.Card{Rank: card.Seven, Suit: card.Hearts}, Owner: P2},
 	}
 
-	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
-	if err != nil {
-		t.Fatalf("P1 plays ace: %v", err)
-	}
+	// Legacy phase-1 path (v0.2.x mid-window save), built directly.
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
 	if s1.Phase != PhaseAwaitingCounter || s1.Active != P2 {
 		t.Fatalf("expected PhaseAwaitingCounter, P2 active; got phase=%d active=%v", s1.Phase, s1.Active)
 	}
@@ -886,10 +884,8 @@ func caseE21(t *testing.T) {
 		{Card: card.Card{Rank: card.Seven, Suit: card.Hearts}, Owner: P1},
 	}
 
-	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
-	if err != nil {
-		t.Fatalf("P1 plays ace: %v", err)
-	}
+	// Legacy phase-1 path (v0.2.x mid-window save), built directly.
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
 	// At least one unfrozen 2 exists, so we must enter PhaseAwaitingCounter.
 	if s1.Phase != PhaseAwaitingCounter {
 		t.Fatalf("expected PhaseAwaitingCounter (unfrozen 2 available), got phase=%d", s1.Phase)
@@ -944,11 +940,8 @@ func caseE22(t *testing.T) {
 		{Card: card.Card{Rank: card.Seven, Suit: card.Diamonds}, Owner: P2},
 	}
 
-	// P1 plays ace.
-	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
-	if err != nil {
-		t.Fatalf("P1 ace: %v", err)
-	}
+	// P1 plays ace. Legacy phase-1 path (v0.2.x mid-window save), built directly.
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
 	if s1.Phase != PhaseAwaitingCounter || s1.Active != P2 {
 		t.Fatalf("expected awaiting counter, P2 active; got phase=%d active=%v", s1.Phase, s1.Active)
 	}
@@ -1726,10 +1719,9 @@ func caseH33e(t *testing.T) {
 		{Card: card.Card{Rank: card.Seven, Suit: card.Diamonds}, Owner: P1},
 	}
 
-	s1, err := Apply(s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
-	if err != nil {
-		t.Fatalf("P1 plays ace: %v", err)
-	}
+	// Legacy phase-1 path (v0.2.x mid-window save), built directly. The
+	// v0.3.0 counter rewind's frozen-2 rule is in counter_rewind_test.go.
+	s1 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: ace, HandIndex: 0})
 	if s1.Phase != PhaseAwaitingCounter {
 		t.Fatalf("expected PhaseAwaitingCounter, got phase=%d", s1.Phase)
 	}
@@ -1743,26 +1735,17 @@ func caseH33e(t *testing.T) {
 	}
 }
 
-// caseH34: Freeze clears at the start of the affected player's *own* next
-// turn, meaning: the freeze is set when the 9 resolves and P2 becomes
-// active; it persists for all of P2's current turn (the "affected" one);
-// after P2 acts, P1 takes a turn — P2's freeze marks are still set while
-// P1 is active; then when P2 becomes active again, endTurn clears them.
+// caseH34: v0.3.0 freeze rule — a card returned by a 9 is frozen for the
+// turn that starts right after the 9, and for no other. endTurn clears both
+// players' marks, so the mark is gone as soon as P2's frozen turn ends.
+// (v0.2.x kept the mark through P1's intervening turn, which let a stale
+// freeze block a counter; see TestStaleFreezeBlocksCounter.)
 //
 // Sequence verified below:
 //  1. P1 plays 9 targeting P2's point card. Active transitions to P2 with
-//     the bounced card frozen in P2's hand.
-//  2. Snapshot s1: Active=P2, bounced card frozen. Cannot be played.
-//  3. P2 passes. Active=P1. P2's freeze marks MUST still be set (they only
-//     clear when P2 re-becomes active).
-//  4. P1 passes. Active=P2 again. Freeze marks now cleared.
-//
-// JUDGMENT: RULES.md does not spell out the clear point; engine code at
-// apply.go:746-750 (endTurn clears the new active player's FrozenIDs) is
-// the authority. nine_test already verifies steps 1-4 minimally; this case
-// adds the intermediate assertion that marks are NOT cleared merely when
-// the opponent takes their turn — they specifically clear at the affected
-// player's next own turn start.
+//     the bounced card frozen in P2's hand. Cannot be played.
+//  2. P2 passes. Active=P1. P2's freeze marks are already cleared.
+//  3. P1 passes. Active=P2 again. Still cleared.
 func caseH34(t *testing.T) {
 	nine := card.Card{Rank: card.Nine, Suit: card.Spades}
 	victim := card.Card{Rank: card.Seven, Suit: card.Diamonds}
@@ -1799,8 +1782,7 @@ func caseH34(t *testing.T) {
 		}
 	}
 
-	// Step 2: P2 passes. Active=P1 now. P2's freeze marks MUST persist —
-	// endTurn clears the NEW active player's marks (P1), not P2's.
+	// Step 2: P2 passes. Active=P1 now. endTurn clears both sides' marks.
 	s2, err := Apply(s1, Move{Kind: MovePass})
 	if err != nil {
 		t.Fatalf("P2 pass: %v", err)
@@ -1808,8 +1790,8 @@ func caseH34(t *testing.T) {
 	if s2.Active != P1 {
 		t.Fatalf("expected Active=P1 after P2 pass, got %v", s2.Active)
 	}
-	if !s2.Players[P2].FrozenIDs[idx] {
-		t.Errorf("freeze must persist through opponent's intervening turn; P2.FrozenIDs=%+v", s2.Players[P2].FrozenIDs)
+	if s2.Players[P2].FrozenIDs != nil || s2.Players[P1].FrozenIDs != nil {
+		t.Errorf("freeze must end with P2's frozen turn; P1=%+v P2=%+v", s2.Players[P1].FrozenIDs, s2.Players[P2].FrozenIDs)
 	}
 
 	// Step 3: P1 passes. Active=P2 again — freeze clears now.

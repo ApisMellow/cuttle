@@ -149,10 +149,8 @@ func TestFive_CounterFlow_TriggersAwaitingCounter(t *testing.T) {
 	s := twoPlayerStart([]card.Card{five}, []card.Card{two},
 		[]card.Card{{Rank: card.Seven, Suit: card.Clubs}})
 
-	s2, err := Apply(s, Move{Kind: MoveOneOff, Card: five, HandIndex: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Legacy phase-1 path (v0.2.x mid-window save); see counter_test.go.
+	s2 := openLegacyWindow(t, s, Move{Kind: MoveOneOff, Card: five, HandIndex: 0})
 	if s2.Phase != PhaseAwaitingCounter {
 		t.Fatalf("expected PhaseAwaitingCounter (P2 has a 2), got %v", s2.Phase)
 	}
