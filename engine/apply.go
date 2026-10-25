@@ -23,7 +23,7 @@ func LegalMoves(s GameState) []Move {
 		moves := legalDiscardMoves(s)
 		// The owed-discard step (no Pending) also offers the counters,
 		// appended after the discard pairs.
-		if counterAvailable(s) {
+		if CounterAvailable(s) {
 			moves = append(moves, counterMovesFor(s.Players[s.Active])...)
 		}
 		return moves
@@ -142,7 +142,7 @@ func LegalMoves(s GameState) []Move {
 	}
 	// Counters go last: cuttle-web's replay scenarios index into this slice,
 	// so the moves above must keep their positions.
-	if counterAvailable(s) {
+	if CounterAvailable(s) {
 		moves = append(moves, counterMovesFor(active)...)
 	}
 	return moves
@@ -160,13 +160,15 @@ func counterMovesFor(p PlayerState) []Move {
 	return moves
 }
 
-// counterAvailable reports whether the active player may open their turn
-// (in PhaseNormal, PhasePendingWin, or the owed-discard step) with a counter:
+// CounterAvailable reports whether the opponent's last turn can be countered
+// right now. It never reads a hand, so it is safe as a public view flag.
+//
+// It is true in PhaseNormal, PhasePendingWin, or the owed-discard step when
 // the opponent's last turn was counterable, no move has been made this turn
 // yet, and there is a position to restore (the end of the active player's
 // own last turn; for the second player's first turn, the dealt position).
 // Paying an owed discard is a first move: it clears LastTurn.
-func counterAvailable(s GameState) bool {
+func CounterAvailable(s GameState) bool {
 	phaseOK := s.Phase == PhaseNormal || s.Phase == PhasePendingWin ||
 		(s.Phase == PhaseAwaitingDiscard && s.Pending == nil)
 	return phaseOK && s.LastTurn.Counterable && !s.ThisTurn.Counterable && s.TurnEnd[s.Active] != nil
@@ -176,7 +178,7 @@ func counterAvailable(s GameState) bool {
 // then MoveDecline ("Let it happen").
 func legalPendingWinMoves(s GameState) []Move {
 	var moves []Move
-	if counterAvailable(s) {
+	if CounterAvailable(s) {
 		moves = counterMovesFor(s.Players[s.Active])
 	}
 	return append(moves, Move{Kind: MoveDecline})
@@ -573,7 +575,7 @@ func apply(s GameState, m Move, fromSeven bool) (GameState, error) {
 // and the counterer goes on to take a normal turn, which is counterable
 // because it began with a counter. TurnEnd is left untouched.
 func applyRewind(s GameState, m Move) (GameState, error) {
-	if !counterAvailable(s) || m.Card.Rank != card.Two {
+	if !CounterAvailable(s) || m.Card.Rank != card.Two {
 		return s, ErrIllegalMove
 	}
 	cp := s.Players[s.Active]
@@ -1027,7 +1029,7 @@ func handOver(s *GameState) {
 //     the opponent's turn (the opponent pops their own Jack with a 2, or
 //     plays a 6); there is no off-turn win, so that player wins here, as
 //     their turn begins and before LegalMoves offers them anything.
-//  3. The counter option, which LegalMoves offers from counterAvailable,
+//  3. The counter option, which LegalMoves offers from CounterAvailable,
 //     together with the owed discard: a player who owes cards (Owed) and
 //     holds any opens the turn in PhaseAwaitingDiscard; an empty hand pays
 //     nothing and the debt clears.
@@ -1036,7 +1038,7 @@ func startTurn(s *GameState) {
 	mover := s.Active.Other()
 	if s.LastTurn.Counterable && HasWon(s.Players[mover]) {
 		s.Phase = PhasePendingWin
-		if counterAvailable(*s) && hasLegalCounter(s.Players[s.Active]) {
+		if CounterAvailable(*s) && hasLegalCounter(s.Players[s.Active]) {
 			return
 		}
 		declareWinner(s, mover)

@@ -167,6 +167,10 @@ func TestRandomPlayouts(t *testing.T) {
 			}
 			// Every generated move must be applicable without error.
 			for i, m := range moves {
+				// The public flag must agree with every offered counter.
+				if m.Kind == MoveCounter && !CounterAvailable(s) {
+					t.Fatalf("seed %d step %d: MoveCounter offered but CounterAvailable is false", seed, step)
+				}
 				if _, err := Apply(s, m); err != nil {
 					t.Fatalf("seed %d step %d: legal move %d (%s) rejected by Apply: %v",
 						seed, step, i, m.Describe(s), err)
