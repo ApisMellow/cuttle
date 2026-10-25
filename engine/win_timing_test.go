@@ -190,8 +190,11 @@ func TestWinTiming_SixReturnsPoints_OpponentWinsAtTurnStart(t *testing.T) {
 	wantWinAtTurnStart(t, s1, P2)
 }
 
-// When one action takes both players over, the player who acted wins on their
-// own action; the turn never passes.
+// When both players are over after the mover's action, the mover's claim
+// comes first. The 6 makes the turn counterable, so since v0.3.0 the turn
+// ends and the pending-win step decides it; P2 holds no 2, so P1 wins at
+// once and is left active. TestPendingWin_E6_BothAtThreshold_MoverFirst
+// covers the case where P2 can counter.
 func TestWinTiming_MoverWinsFirstWhenBothOver(t *testing.T) {
 	six := pc(card.Six, card.Clubs)
 	s := twoPlayerStart([]card.Card{six}, nil, nil)

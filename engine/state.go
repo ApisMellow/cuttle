@@ -66,6 +66,11 @@ const (
 	PhaseSevenChoosing
 	PhaseAwaitingDiscard
 	PhaseGameOver
+	// PhasePendingWin ("Not So Fast!"): the opponent reached their threshold
+	// on a counterable turn, and Active holds an unfrozen 2. Active's turn has
+	// started early with two options: counter (the normal rewind) or decline
+	// ("Let it happen"), which ends the game with the opponent the winner.
+	PhasePendingWin
 )
 
 type TargetZone uint8

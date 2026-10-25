@@ -106,6 +106,17 @@ func checkPlayoutInvariants(t *testing.T, s GameState, seed int64, step int) {
 		t.Fatalf("seed %d step %d: winner set but phase is %d", seed, step, s.Phase)
 	}
 
+	// A pending win is held by the player who reached their threshold, and
+	// the decider can counter it.
+	if s.Phase == PhasePendingWin {
+		if !HasWon(s.Players[s.Active.Other()]) || !s.LastTurn.Counterable {
+			t.Fatalf("seed %d step %d: pending win for P%d, who has not won on a counterable turn", seed, step, s.Active.Other()+1)
+		}
+		if !hasLegalCounter(s.Players[s.Active]) {
+			t.Fatalf("seed %d step %d: pending win, but P%d holds no unfrozen 2", seed, step, s.Active+1)
+		}
+	}
+
 	// Counter-rewind snapshots are one level deep.
 	for p, snap := range s.TurnEnd {
 		if snap != nil && (snap.TurnEnd[P1] != nil || snap.TurnEnd[P2] != nil) {
@@ -120,11 +131,15 @@ func checkPlayoutInvariants(t *testing.T, s GameState, seed int64, step int) {
 // coherent result.
 func TestRandomPlayouts(t *testing.T) {
 	const games = 500
-	counters := 0
+	counters, pendingWins := 0, 0
 	defer func() {
 		// Counter rewinds must actually be in play, not just offered.
 		if !t.Failed() && counters == 0 {
 			t.Errorf("no counter was applied in %d games", games)
+		}
+		// So must the pending win ("Not So Fast!").
+		if !t.Failed() && pendingWins == 0 {
+			t.Errorf("no game reached PhasePendingWin in %d games", games)
 		}
 	}()
 	for seed := int64(1); seed <= games; seed++ {
@@ -163,6 +178,9 @@ func TestRandomPlayouts(t *testing.T) {
 				t.Fatalf("seed %d step %d: Apply mutated its input state (move: %s)", seed, step, m.Describe(s))
 			}
 			s = next
+			if s.Phase == PhasePendingWin {
+				pendingWins++
+			}
 			checkPlayoutInvariants(t, s, seed, step)
 		}
 	}

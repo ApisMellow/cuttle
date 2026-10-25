@@ -25,6 +25,9 @@ func LegalMoves(s GameState) []Move {
 	if s.Phase == PhaseSevenChoosing {
 		return legalSevenPickMoves(s)
 	}
+	if s.Phase == PhasePendingWin {
+		return legalPendingWinMoves(s)
+	}
 	if s.Phase != PhaseNormal {
 		// later phases handled in later tasks
 		return nil
@@ -143,13 +146,29 @@ func LegalMoves(s GameState) []Move {
 	return moves
 }
 
-// counterAvailable reports whether the active player may open their turn in
-// PhaseNormal with a counter: the opponent's last turn was counterable, no
-// move has been made this turn yet, and there is a position to restore (the
-// end of the active player's own last turn; absent on their first turn).
+// counterAvailable reports whether the active player may open their turn
+// (in PhaseNormal, or in PhasePendingWin) with a counter: the opponent's last
+// turn was counterable, no move has been made this turn yet, and there is a
+// position to restore (the end of the active player's own last turn; absent
+// on their first turn).
 func counterAvailable(s GameState) bool {
-	return s.Phase == PhaseNormal && s.LastTurn.Counterable &&
+	return (s.Phase == PhaseNormal || s.Phase == PhasePendingWin) && s.LastTurn.Counterable &&
 		!s.ThisTurn.Counterable && s.TurnEnd[s.Active] != nil
+}
+
+// legalPendingWinMoves lists one MoveCounter per unfrozen 2 in hand order,
+// then MoveDecline ("Let it happen").
+func legalPendingWinMoves(s GameState) []Move {
+	var moves []Move
+	if counterAvailable(s) {
+		p := s.Players[s.Active]
+		for i, c := range p.Hand {
+			if c.Rank == card.Two && !p.FrozenIDs[i] {
+				moves = append(moves, Move{Kind: MoveCounter, Card: c, HandIndex: i})
+			}
+		}
+	}
+	return append(moves, Move{Kind: MoveDecline})
 }
 
 // Apply validates the move (must appear in LegalMoves(s)) and returns the new state.
@@ -161,6 +180,9 @@ func Apply(s GameState, m Move) (GameState, error) {
 // deck rather than the hand and so is not a countered card.
 func apply(s GameState, m Move, fromSeven bool) (GameState, error) {
 	if s.Phase == PhaseGameOver {
+		return s, ErrIllegalMove
+	}
+	if s.Phase == PhasePendingWin && m.Kind != MoveCounter && m.Kind != MoveDecline {
 		return s, ErrIllegalMove
 	}
 	out := clone(s)
@@ -209,10 +231,7 @@ func apply(s GameState, m Move, fromSeven bool) (GameState, error) {
 		removeFromHand(p, m.HandIndex)
 		p.Points = append(p.Points, PointEntry{Card: m.Card, Owner: out.Active})
 		out.PassesInARow = 0
-		if checkWin(&out, out.Active) {
-			return out, nil
-		}
-		endTurn(&out)
+		finishTurn(&out)
 		return out, nil
 	case MovePlayPermanent:
 		p := &out.Players[out.Active]
@@ -247,10 +266,7 @@ func apply(s GameState, m Move, fromSeven bool) (GameState, error) {
 			removeFromHand(p, m.HandIndex)
 			out.Players[out.Active].Points = append(out.Players[out.Active].Points, pe)
 			out.PassesInARow = 0
-			if checkWin(&out, out.Active) {
-				return out, nil
-			}
-			endTurn(&out)
+			finishTurn(&out)
 			return out, nil
 		}
 		if m.Card.Rank != card.Queen && m.Card.Rank != card.King && m.Card.Rank != card.Eight {
@@ -259,10 +275,7 @@ func apply(s GameState, m Move, fromSeven bool) (GameState, error) {
 		removeFromHand(p, m.HandIndex)
 		p.Permanents = append(p.Permanents, m.Card)
 		out.PassesInARow = 0
-		if checkWin(&out, out.Active) {
-			return out, nil
-		}
-		endTurn(&out)
+		finishTurn(&out)
 		return out, nil
 	case MoveScuttle:
 		p := &out.Players[out.Active]
@@ -358,7 +371,7 @@ func apply(s GameState, m Move, fromSeven bool) (GameState, error) {
 		resolveOneOffWith(&out, m.Card, played, m.ScrapIndex, m.Target)
 		return out, nil
 	case MoveCounter:
-		if s.Phase == PhaseNormal {
+		if s.Phase == PhaseNormal || s.Phase == PhasePendingWin {
 			return applyRewind(s, m)
 		}
 		// Legacy: a v0.2.x state saved mid-window.
@@ -489,6 +502,11 @@ func apply(s GameState, m Move, fromSeven bool) (GameState, error) {
 		sub.HandIndex = injectIdx
 		return apply(out, sub, true)
 	case MoveDecline:
+		if s.Phase == PhasePendingWin {
+			// "Let it happen": the opponent's pending win stands.
+			declareWinner(&out, out.Active.Other())
+			return out, nil
+		}
 		if s.Phase != PhaseAwaitingCounter || out.Pending == nil {
 			return s, ErrIllegalMove
 		}
@@ -544,6 +562,12 @@ func applyRewind(s GameState, m Move) (GameState, error) {
 	// The opponent's turn is erased, so there is nothing left to counter.
 	out.LastTurn = TurnRecord{}
 	out.ThisTurn = TurnRecord{Counterable: true, Countered: []card.Card{m.Card}}
+	// The §4 check: a restore that leaves the counterer at their threshold
+	// (a counter-back to a winning position) ends their turn at once, and
+	// the pending-win logic applies to the opponent.
+	if HasWon(out.Players[counterer]) {
+		endTurn(&out)
+	}
 	return out, nil
 }
 
@@ -839,23 +863,22 @@ func resolveOneOffWith(s *GameState, c card.Card, played PlayerID, scrapIndex in
 			tp.Permanents = removeAt(tp.Permanents, target.Index)
 			returnTo = target.Owner
 		}
-		// Return the card, then end the turn, then freeze it: endTurn's
-		// snapshot must hold the card in hand, and its frozen-clear must not
-		// wipe the mark, which lasts for the turn starting now and no other.
+		// Return the card, hand the turn over, freeze it, then run the
+		// turn-start steps: the snapshot must hold the card in hand, the
+		// frozen-clear must not wipe the mark (it lasts for the turn starting
+		// now and no other), and a pending-win check must see it frozen.
 		rp := &s.Players[returnTo]
 		rp.Hand = append(rp.Hand, returned)
 		frozenIdx := len(rp.Hand) - 1
-		endTurn(s)
+		handOver(s)
 		if rp.FrozenIDs == nil {
 			rp.FrozenIDs = map[int]bool{}
 		}
 		rp.FrozenIDs[frozenIdx] = true
+		startTurn(s)
 		return
 	}
-	if checkWin(s, played) {
-		return
-	}
-	endTurn(s)
+	finishTurn(s)
 }
 
 // removeFromHand removes hand index i and remaps FrozenIDs so each frozen
@@ -896,29 +919,49 @@ func removeAt[T any](xs []T, i int) []T {
 // checkWin sets phase/winner if p has reached threshold. Returns true if game ended.
 func checkWin(s *GameState, p PlayerID) bool {
 	if HasWon(s.Players[p]) {
-		s.Phase = PhaseGameOver
-		winner := p
-		s.Winner = &winner
+		declareWinner(s, p)
 		return true
 	}
 	return false
 }
 
-// endTurn closes the outgoing player's turn and starts the next one:
-//  1. ThisTurn moves into LastTurn.
-//  2. Active hands over.
-//  3. The freeze rule: both players' frozen marks are cleared (a 9 sets its
-//     new mark after endTurn returns).
-//  4. The snapshot TurnEnd[outgoing] is taken, one level deep.
-//  5. The start-of-turn win check. A player can reach their threshold during
-//     the opponent's turn (the opponent pops their own Jack with a 2, or
-//     plays a 6); there is no off-turn win, so that player wins here, as
-//     their turn begins and before LegalMoves offers them anything.
+// declareWinner ends the game with p the winner. The winner is left active,
+// as every game-over position has it.
+func declareWinner(s *GameState, p PlayerID) {
+	s.Phase = PhaseGameOver
+	s.Active = p
+	winner := p
+	s.Winner = &winner
+}
+
+// finishTurn ends the active player's turn after an action. A win on a turn
+// that can't be countered happens at once. On a counterable turn the turn
+// ends first, and the pending-win step of startTurn decides it.
+func finishTurn(s *GameState) {
+	if !s.ThisTurn.Counterable && checkWin(s, s.Active) {
+		return
+	}
+	endTurn(s)
+}
+
+// endTurn closes the outgoing player's turn and starts the next one
+// (handOver, then startTurn).
 //
 // endTurn is the only place a turn begins. A legacy counter window flips
 // Active without calling it, so this never fires mid-chain; it runs once the
 // chain has resolved and the turn actually passes.
 func endTurn(s *GameState) {
+	handOver(s)
+	startTurn(s)
+}
+
+// handOver closes the outgoing player's turn:
+//  1. ThisTurn moves into LastTurn.
+//  2. Active hands over.
+//  3. The freeze rule: both players' frozen marks are cleared (a 9 sets its
+//     new mark after handOver, before startTurn).
+//  4. The snapshot TurnEnd[outgoing] is taken, one level deep.
+func handOver(s *GameState) {
 	outgoing := s.Active
 	s.LastTurn = s.ThisTurn
 	s.ThisTurn = TurnRecord{}
@@ -928,6 +971,32 @@ func endTurn(s *GameState) {
 	snap := clone(*s)
 	snap.TurnEnd = [2]*GameState{}
 	s.TurnEnd[outgoing] = &snap
+}
+
+// startTurn runs the incoming (now active) player's turn-start steps, in
+// order (design §4, "Not So Fast!"):
+//  1. A pending win. If the outgoing player reached their threshold on a
+//     counterable turn, their claim comes first, even when the incoming
+//     player is at threshold too. If the incoming player can counter (an
+//     unfrozen 2, under the marks for the turn now starting, and a position
+//     to restore), the game enters PhasePendingWin; otherwise the outgoing
+//     player wins at once.
+//  2. The start-of-turn win check. A player can reach their threshold during
+//     the opponent's turn (the opponent pops their own Jack with a 2, or
+//     plays a 6); there is no off-turn win, so that player wins here, as
+//     their turn begins and before LegalMoves offers them anything.
+//  3. The counter option, which LegalMoves offers from counterAvailable.
+//  4. The normal turn.
+func startTurn(s *GameState) {
+	mover := s.Active.Other()
+	if s.LastTurn.Counterable && HasWon(s.Players[mover]) {
+		s.Phase = PhasePendingWin
+		if counterAvailable(*s) && hasLegalCounter(s.Players[s.Active]) {
+			return
+		}
+		declareWinner(s, mover)
+		return
+	}
 	checkWin(s, s.Active)
 }
 
